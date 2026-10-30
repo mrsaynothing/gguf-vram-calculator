@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GGUF VRAM Calculator — will your model fit?</title>
+<meta name="description" content="Estimate the VRAM a GGUF quant needs: weights + KV cache + overhead, against real card sizes. Math from public quant tables and file sizes.">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; border-radius: 0; }
+  body { margin:0; background:#000; color:#fff; font:16px/1.6 "IBM Plex Mono","JetBrains Mono",ui-monospace,Menlo,Consolas,monospace; }
+  main { max-width: 46rem; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+  h1 { font-size: 1.9rem; line-height:1.15; margin:0 0 .5rem; letter-spacing:-.02em; }
+  h1 .tick { color:#ff6b1a; }
+  h2 { font-size: 1.05rem; text-transform: uppercase; letter-spacing:.14em; color:#ff6b1a; margin:2.5rem 0 .75rem; }
+  .dek { color:#999; margin:0 0 1.5rem; }
+  blockquote[data-answer] { margin:0 0 2rem; padding:1rem 1.25rem; border-left:3px solid #ff6b1a; background:#111; color:#ddd; }
+  blockquote[data-answer] b { color:#fff; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(13rem,1fr)); gap:1rem; }
+  label { display:block; font-size:.72rem; text-transform:uppercase; letter-spacing:.12em; color:#888; margin-bottom:.3rem; }
+  select,input { width:100%; background:#0a0a0a; color:#fff; border:1px solid #333; padding:.55rem .6rem; font:inherit; font-size:.95rem; }
+  select:focus,input:focus { outline:none; border-color:#ff6b1a; }
+  #out { margin-top:1.75rem; border:1px solid #333; padding:1.25rem; background:#0a0a0a; }
+  #out .verdict { font-size:1.25rem; margin:0 0 .75rem; }
+  #out .fits { color:#4ade80; } #out .tight { color:#fbbf24; } #out .nope { color:#f87171; }
+  #out .rows { color:#aaa; font-size:.92rem; margin:0; padding:0; list-style:none; }
+  #out .rows li { display:flex; justify-content:space-between; border-bottom:1px dotted #222; padding:.25rem 0; }
+  #out .rows li b { color:#fff; font-weight:600; }
+  .bar { height:.6rem; background:#1a1a1a; margin-top:.9rem; position:relative; }
+  .bar i { position:absolute; inset:0 auto 0 0; background:#ff6b1a; }
+  table { width:100%; border-collapse:collapse; font-size:.88rem; margin-top:1rem; }
+  th,td { text-align:left; padding:.45rem .6rem; border-bottom:1px solid #222; }
+  th { color:#888; font-weight:600; font-size:.72rem; text-transform:uppercase; letter-spacing:.1em; }
+  td.n { text-align:right; font-variant-numeric:tabular-nums; }
+  p,li { color:#bbb; }
+  code { background:#111; padding:.1em .35em; color:#f6c177; font-size:.9em; }
+  footer { margin-top:3rem; padding-top:1.25rem; border-top:1px solid #222; color:#666; font-size:.85rem; }
+  footer a { color:#fff; text-decoration:none; border-bottom:1px solid #333; }
+  footer a:hover { border-color:#ff6b1a; color:#ff6b1a; }
+  .fine { font-size:.8rem; color:#666; margin-top:.5rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1><span class="tick">■</span> GGUF VRAM Calculator</h1>
+  <p class="dek">Weights + KV cache + the tax. The three numbers that decide if a quant fits your card.</p>
+
+  <blockquote data-answer>
+    A <b>7B-class model at Q4_K_M is ~4.2&nbsp;GiB of weights</b>; at 8k context the KV cache adds
+    <b>~1&nbsp;GiB</b> (Llama-3-style GQA) and inference overhead adds roughly one more — so the honest
+    rule of thumb is <b>weights&nbsp;×&nbsp;1.3 for chat-length context, plus your desktop's own reserve</b>.
+    Estimate yours precisely below.
+  </blockquote>
+
+  <h2>Model</h2>
+  <div class="grid">
+    <div>
+      <label for="arch">Architecture preset</label>
+      <select id="arch">
+        <option value="l38">Llama 3.1 / 3.2 · 8B</option>
+        <option value="l33">Llama 3.2 · 3B</option>
+        <option value="mistral">Mistral / Ministral · 7B</option>
+        <option value="qwen">Qwen2.5 · 7B</option>
+        <option value="l27">Llama 2 · 7B (MHA — hungry)</option>
+        <option value="l370">Llama 3.3 · 70B</option>
+        <option value="custom">Custom…</option>
+      </select>
+    </div>
+    <div>
+      <label for="params">Params (billions)</label>
+      <input id="params" type="number" min="0.1" step="0.1" value="8.0">
+    </div>
+    <div>
+      <label for="quant">GGUF quant</label>
+      <select id="quant">
+        <option value="3.35">Q2_K</option>
+        <option value="3.91">Q3_K_M</option>
+        <option value="4.55">Q4_0</option>
+        <option value="4.25">IQ4_XS</option>
+        <option value="4.75">MXFP4_mo</option>
+        <option value="4.85" selected>Q4_K_M</option>
+        <option value="5.69">Q5_K_M</option>
+        <option value="6.59">Q6_K</option>
+        <option value="8.5">Q8_0</option>
+        <option value="16">F16</option>
+      </select>
+    </div>
+  </div>
+
+  <h2>Context</h2>
+  <div class="grid">
+    <div>
+      <label for="ctx">Context (tokens)</label>
+      <input id="ctx" type="number" min="128" step="512" value="8192">
+    </div>
+    <div>
+      <label for="layers">Layers</label>
+      <input id="layers" type="number" min="1" step="1" value="32">
+    </div>
+    <div>
+      <label for="kvheads">KV heads (GQA)</label>
+      <input id="kvheads" type="number" min="1" step="1" value="8">
+    </div>
+    <div>
+      <label for="kvq">KV cache quant</label>
+      <select id="kvq">
+        <option value="1">f16 (default)</option>
+        <option value="0.5">q8_0</option>
+        <option value="0.25">q4_0*</option>
+      </select>
+    </div>
+  </div>
+  <p class="fine">* q4_0 KV needs <code>-fa</code> flash-attn and a build that supports it; where it works it quarters the cache.</p>
+
+  <h2>The tax + the card</h2>
+  <div class="grid">
+    <div>
+      <label for="over">Compute overhead (GiB)</label>
+      <input id="over" type="number" min="0" step="0.1" value="0.8">
+    </div>
+    <div>
+      <label for="gpu">Your card (GiB)</label>
+      <select id="gpu">
+        <option value="6">6 — RTX 3060 Ti class</option>
+        <option value="8">8 — RTX 4060 / 3070 class</option>
+        <option value="12">12 — RTX 3060 / 4070 class</option>
+        <option value="16">16 — RTX 4060 Ti 16G / 4080·5080·9070 XT</option>
+        <option value="24" selected>24 — RTX 3090 / 4090</option>
+        <option value="32">32 — RTX 5090</option>
+        <option value="48">48 — A6000 / dual 24G</option>
+        <option value="80">80 — A100 / H100</option>
+      </select>
+    </div>
+  </div>
+
+  <div id="out">
+    <p class="verdict" id="verdict">—</p>
+    <ul class="rows">
+      <li><span>Weights</span><b id="r-w">—</b></li>
+      <li><span>KV cache</span><b id="r-k">—</b></li>
+      <li><span>Overhead</span><b id="r-o">—</b></li>
+      <li><span>Total</span><b id="r-t">—</b></li>
+    </ul>
+    <div class="bar"><i id="bar" style="width:0%"></i></div>
+    <p class="fine" id="r-max"></p>
+  </div>
+
+  <h2>Sanity check — public GGUF files vs this math</h2>
+  <p>The formula earns trust against files you can download today (weights = params × bpw ÷ 8 × 1.08; the 8% is embeddings and the output head staying above the quant's nominal bits):</p>
+  <table>
+    <thead><tr><th>Model · quant</th><th class="n">Real file</th><th class="n">This math</th></tr></thead>
+    <tbody>
+      <tr><td>Llama-2 7B · Q4_K_M</td><td class="n">4.08 GiB</td><td class="n">4.1 GiB</td></tr>
+      <tr><td>Llama-3 8B · Q4_K_M</td><td class="n">4.92 GiB</td><td class="n">4.9 GiB</td></tr>
+      <tr><td>Mistral 7B · Q4_K_M</td><td class="n">4.37 GiB</td><td class="n">4.4 GiB</td></tr>
+      <tr><td>Llama-3 8B · Q8_0</td><td class="n">8.50 GiB</td><td class="n">8.6 GiB</td></tr>
+    </tbody>
+  </table>
+
+  <h2>The math, stated</h2>
+  <ul>
+    <li><b>Weights</b> = params × 10⁹ × (quant bpw ÷ 8) × 1.08. The bpw column is llama.cpp's nominal table; the 8% fudge is what real files show once embeddings and lm_head refuse to shrink.</li>
+    <li><b>KV cache</b> = 2 × layers × kv_heads × head_dim × 2 bytes × context. Head dim is 128 across every preset above. This is why MHA Llama-2 eats 4 GiB of cache at 8k while GQA Llama-3 eats 1.</li>
+    <li><b>Overhead</b> = CUDA context + cuBLAS + compute graph buffers. ~0.6–1.2 GiB; it grows a little with context and a lot with batch size.</li>
+    <li>What it doesn't count: MoE routing tables (often sharded oddly), draft models, and the VRAM your desktop already took.</li>
+  </ul>
+  <p class="fine">We run CPU-side inference benches and publish the ledgers; the GPU math here is consolidation of public quant tables and public file sizes — no "we tested it on an H100" cosplay.</p>
+
+  <footer>
+    <p>Made by <a href="https://mrsaynothing.dev/?utm_source=gguf-vram-calculator&utm_medium=footer&utm_campaign=tool">mrsaynothing.dev</a> · every post passed the gate ·
+    <a href="https://mrsaynothing.dev/en/board/gguf?utm_source=gguf-vram-calculator&utm_medium=board&utm_campaign=tool">the gguf board</a> · MIT</p>
+  </footer>
+</main>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var ARCH = {
+    l38:    { p: 8.0,  L: 32, kvH: 8,  hd: 128 },
+    l33:    { p: 3.2,  L: 28, kvH: 8,  hd: 128 },
+    mistral:{ p: 7.2,  L: 32, kvH: 8,  hd: 128 },
+    qwen:   { p: 7.6,  L: 28, kvH: 4,  hd: 128 },
+    l27:    { p: 6.7,  L: 32, kvH: 32, hd: 128 },
+    l370:   { p: 70.6, L: 80, kvH: 8,  hd: 128 },
+    custom: null
+  };
+  var GiB = 1024 * 1024 * 1024;
+
+  function num(id) { var v = parseFloat($(id).value); return isFinite(v) && v > 0 ? v : 0; }
+
+  function calc() {
+    var p = num('params'), bpw = parseFloat($('quant').value), ctx = num('ctx');
+    var L = num('layers'), kvH = num('kvheads'), kvMul = parseFloat($('kvq').value);
+    var over = num('over'), gpu = parseFloat($('gpu').value);
+    if (!p || !ctx || !L || !kvH) { $('verdict').textContent = 'Fill every field.'; return; }
+
+    var w = p * 1e9 * (bpw / 8) * 1.08 / GiB;
+    var kvtok = 2 * L * kvH * 128 * 2 * kvMul;           // bytes per token, head dim 128
+    var kv = kvtok * ctx / GiB;
+    var total = w + kv + over;
+
+    $('r-w').textContent = w.toFixed(2) + ' GiB';
+    $('r-k').textContent = kv.toFixed(2) + ' GiB (' + (kvtok / 1024).toFixed(0) + ' KiB/token)';
+    $('r-o').textContent = over.toFixed(2) + ' GiB';
+    $('r-t').textContent = total.toFixed(2) + ' GiB';
+
+    var v = $('verdict'), bar = $('bar'), spare = gpu - total;
+    bar.style.width = Math.min(100, total / gpu * 100) + '%';
+    if (spare >= 1) {
+      v.className = 'verdict fits';
+      v.textContent = 'Fits — ' + spare.toFixed(1) + ' GiB spare on ' + gpu + ' GB.';
+    } else if (spare >= 0) {
+      v.className = 'verdict tight';
+      v.textContent = 'Knife-edge — ' + spare.toFixed(1) + ' GiB spare. One big prompt from a crash.';
+    } else {
+      v.className = 'verdict nope';
+      v.textContent = 'Does not fit — ' + (-spare).toFixed(1) + ' GiB over a ' + gpu + ' GB card.';
+    }
+    var maxCtx = Math.floor((gpu - w - over) * GiB / kvtok);
+    $('r-max').textContent = maxCtx > 0
+      ? 'Max context on this card ≈ ' + (maxCtx > 9999 ? (maxCtx / 1024).toFixed(0) + 'k' : maxCtx) + ' tokens (weights + overhead only).'
+      : 'Weights alone will not fit this card.';
+  }
+
+  $('arch').addEventListener('change', function () {
+    var a = ARCH[this.value];
+    if (!a) return;
+    $('params').value = a.p; $('layers').value = a.L; $('kvheads').value = a.kvH;
+    calc();
+  });
+  ['params','quant','ctx','layers','kvheads','kvq','over','gpu'].forEach(function (id) {
+    $(id).addEventListener('input', calc);
+  });
+  calc();
+})();
+</script>
+</body>
+</html>
