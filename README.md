@@ -17,10 +17,10 @@ the quant's nominal bits-per-weight. Verified against public GGUF files:
 
 | Model · quant | Real file | This math |
 |---|---|---|
-| Llama-2 7B · Q4_K_M | 4.08 GiB | 4.09 |
-| Llama-3 8B · Q4_K_M | 4.92 GiB | 4.88 |
-| Mistral 7B · Q4_K_M | 4.37 GiB | 4.39 |
-| Llama-3 8B · Q8_0 | 8.50 GiB | 8.55 |
+| Llama-2 7B · Q4_K_M | 4.08 GB | 4.09 |
+| Llama-3 8B · Q4_K_M | 4.92 GB | 4.88 |
+| Mistral 7B · Q4_K_M | 4.37 GB | 4.39 |
+| Llama-3 8B · Q8_0 | 8.54 GB | 8.55 |
 
 What it does **not** count: MoE routing sharding, draft models, and whatever your desktop
 already took.
